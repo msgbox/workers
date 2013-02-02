@@ -15,9 +15,7 @@ func Incoming(tag string, connection *amqp.Connection) {
 
 	// Create a Consumer
 	c, err := queue.BuildConsumer(tag, connection)
-	if err != nil {
-		fmt.Errorf("Consumer Error: %s", err)
-	}
+	checkError(err)
 
 	// Start the Worker
 	deliveries, err := c.Channel.Consume(
@@ -29,43 +27,51 @@ func Incoming(tag string, connection *amqp.Connection) {
 		false,               // noWait
 		nil,                 // arguments
 	)
-	if err != nil {
-		fmt.Errorf("Queue Consume: %s", err)
-	}
+	checkError(err)
 
-	go handleIncoming(deliveries, c.Done)
-
+	// Handle messages coming off the queue
+	// Shouldn't need a go routine here because it should be
+	// blocking so each worker will only have a single worker
+	handleIncoming(deliveries, c.Done)
 }
 
 // Handle Incoming Items off the queue
 func handleIncoming(deliveries <-chan amqp.Delivery, done chan error) {
 	for d := range deliveries {
-		msg := messages.Parse(d.Body)
-
-		// Get Name and Box
-		m_name, m_box := messages.ParseReceiver(msg.GetReceiver())
-
-		// Lookup Name and Box in data store to ensure they exist
-		account := storage.FindAccount(m_name)
-		if account == nil {
-			// Handle non-existing account
-			fmt.Println("Account does not exist")
+		status := saveMessage(d.Body)
+		if status {
+			d.Ack(true)
 		}
-
-		box := storage.FindBox(*&account.Id, m_box)
-		if box == nil {
-			// Handle non-existing account
-			fmt.Println("Account does not have a box with that name")
-		}
-
-		// Insert Message into Database
-		err := storage.InsertMessage(account.Id, box.Id, *&msg)
-		if err != nil {
-			fmt.Printf("Error saving Message: %s", err)
-		}
-
-		d.Ack(true)
 	}
 
 	done <- nil
+}
+
+func saveMessage(data []byte) bool {
+	msg := messages.Parse(data)
+
+	// Get Name and Box
+	m_name, m_box := messages.ParseReceiver(msg.GetReceiver())
+
+	// Lookup Name and Box in data store to ensure they exist
+	account := storage.FindAccount(m_name)
+	if account == nil {
+		fmt.Println("Account does not exist")
+		return false
+	}
+
+	box := storage.FindBox(*&account.Id, m_box)
+	if box == nil {
+		fmt.Println("Account does not have a box with that name")
+		return false
+	}
+
+	// Insert Message into Database
+	err := storage.InsertMessage(account.Id, box.Id, *&msg)
+	if err != nil {
+		fmt.Printf("Error saving Message: %s", err)
+		return false
+	}
+
+	return true
 }

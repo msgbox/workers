@@ -1,6 +1,7 @@
 package workers
 
 import (
+	"fmt"
 	"github.com/msgbox/queue"
 	"github.com/msgbox/workers/workers"
 	"github.com/streadway/amqp"
@@ -15,7 +16,7 @@ var workerConn *workers
 func init() {
 	conn, err := queue.Connect()
 	if err != nil {
-		// Handle Error
+		fmt.Printf("Fatal error: %s", err.Error())
 	}
 
 	workerConn = &workers{queue: conn}

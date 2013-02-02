@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"github.com/msgbox/queue"
 	"github.com/streadway/amqp"
-	"log"
 	"net"
 )
 
@@ -19,11 +18,9 @@ func Outgoing(tag string, connection *amqp.Connection, relay *Relay) {
 
 	// Create a Consumer
 	c, err := queue.BuildConsumer(tag, connection)
-	if err != nil {
-		fmt.Errorf("Consumer Error: %s", err)
-	}
+	checkError(err)
 
-	// Start the Worker
+	// Start the Consuming
 	deliveries, err := c.Channel.Consume(
 		"outgoing_messages", // name
 		c.Tag,               // consumerTag,
@@ -33,38 +30,53 @@ func Outgoing(tag string, connection *amqp.Connection, relay *Relay) {
 		false,               // noWait
 		nil,                 // arguments
 	)
-	if err != nil {
-		fmt.Errorf("Queue Consume: %s", err)
-	}
+	checkError(err)
 
-	go handleOutgoing(deliveries, c.Done, relay)
-
+	// Handle messages coming off the queue
+	// Shouldn't need a go routine here because it should be
+	// blocking so each worker will only have a single worker
+	handleOutgoing(deliveries, c.Done, relay)
 }
 
 // Handle Outgoing messages from the queue
 func handleOutgoing(deliveries <-chan amqp.Delivery, done chan error, relay *Relay) {
 	for d := range deliveries {
-		transfer(d.Body, relay)
-		d.Ack(true)
+		status := transfer(d.Body, relay)
+		if status {
+			d.Ack(true)
+		}
 	}
 
 	done <- nil
 }
 
-func transfer(msg []byte, relay *Relay) {
+func transfer(msg []byte, relay *Relay) bool {
 	node := relay.Addr
 
-	conn, err := net.Dial("tcp", node)
+	tcpAddr, err := net.ResolveTCPAddr("tcp4", node)
 	if err != nil {
-		// Handler Err
+		fmt.Printf("Fatal error: %s", err.Error())
+		return false
+	}
+
+	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	if err != nil {
+		fmt.Printf("Fatal error: %s", err.Error())
+		return false
 	}
 	defer conn.Close()
 
-	status, err := conn.Write(msg)
+	_, err = conn.Write(msg)
 	if err != nil {
-		// Handle Write Err
+		fmt.Printf("Fatal error: %s", err.Error())
+		return false
 	}
 
-	log.Printf("status = %s", status)
+	return true
+}
 
+func checkError(err error) {
+	if err != nil {
+		fmt.Printf("Fatal error: %s", err.Error())
+	}
 }
